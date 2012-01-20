@@ -2,11 +2,16 @@
 #define HAMT_MAP_HH
 
 #include "hamt/hash.hh"
+#include "hamt/eql.hh"
 #include <cstddef> // for NULL
+
+// for debug
+#include <iostream>
 
 namespace hamt {
   typedef unsigned bitmap_t;
   typedef unsigned hashcode_t;
+  const unsigned PER_ARC_BIT_LENGTH = 5;
 
   namespace {
     unsigned bitcount(unsigned n) {
@@ -89,14 +94,38 @@ namespace hamt {
     }
   };
 
-  template <class Key, class Value> //, class Hash, class Eql>
+  template <class Key, class Value, 
+            class Hash=hamt::hash_functor<Key>, class Eql=hamt::eql_functor<Key> >
   class map {
+    typedef entry<Key,Value> entry_t;
   public:
+    map() : root_entries(NULL), new_root_entries(NULL),
+            root_bitlen(3), 
+            entry_count(0)
+    {
+      const unsigned init_size = 1 << root_bitlen;
+      resize_border = init_size << PER_ARC_BIT_LENGTH;
+      root_entries = new entry_t[init_size];
+    }
+    
+    ~map() {
+      delete [] root_entries;
+      delete [] new_root_entries;
+    }
+      
     Value* find(const Key& key) const {
       return NULL;
     }
 
   private:
+    entry_t* root_entries;
+    entry_t* new_root_entries;
+    unsigned root_bitlen;
+    unsigned resize_border;
+    unsigned entry_count;
+
+    static const Hash hash;
+    static const Eql eql;
   };
 }
 
