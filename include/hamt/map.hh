@@ -42,7 +42,7 @@ namespace hamt {
   template <class Entry>
   struct amt_node {
     E_TYPE type;
-    Entry* entries;
+    Entry** entries;
     unsigned entries_size;
     bitmap_t bitmap;
     
@@ -58,7 +58,7 @@ namespace hamt {
     Entry* get_entry(unsigned index) const {
       if(is_valid_entry(index) == false)
         return NULL;
-      return &entries[entry_index(index)];
+      return entries[entry_index(index)];
     }
     
     unsigned entry_index(unsigned index) const {
@@ -70,7 +70,7 @@ namespace hamt {
       if(is_valid_entry(index)) {
         entries[e_index] = entry;
       } else {
-        Entry* new_entries = new Entry[entries_size+1]; // TODO: allocator
+        Entry** new_entries = new Entry*[entries_size+1]; // TODO: allocator
 
         // copy
         unsigned i=0;
@@ -159,6 +159,20 @@ namespace hamt {
       return &entry->value;
     }
 
+    void set(const Key& key, const Value& value) {
+      arc_stream_t in(key);
+      entry_t* entry = find_impl(in);
+      if(entry == NULL) {
+        entry_count++;
+        arc_stream_t in2(key);
+        set_if_not_exists_impl(in2, key, value);
+        // TODO: amortized_resize()
+      } else {
+        // TODO: maybe collision
+        entry->value = value;
+      }
+    }
+
     unsigned size() const { return entry_count; }
 
   private:
@@ -172,7 +186,7 @@ namespace hamt {
         entries = new_root_entries;
       }
       entry_t* entry = entries[arc];
-      //entry_t** entry_place = &entries[arc];
+
       if(entry==NULL) {
         return NULL;
       } else if(entry->type == E_ENTRY) {
@@ -191,6 +205,39 @@ namespace hamt {
       }      
     }
 
+    void set_if_not_exists_impl(arc_stream_t& in, const Key& key, const Value& value) const {
+      unsigned arc = in.read_n(root_bitlen);
+      entry_t **entries;
+      if(arc < resize_border) {
+        entries = root_entries;
+      } else {
+        arc += (in.read() << root_bitlen);
+        entries = new_root_entries;
+      }
+      entry_t* entry = entries[arc];
+
+      if(entry==NULL) {
+        entries[arc] = new entry_t(); // XXX:
+        entries[arc]->key = key;
+        entries[arc]->value = value;
+      } else if(entry->type == E_ENTRY) {
+        return;
+      } else {
+        for(;;) {
+          amt_node_t* node = (amt_node_t*)entry; // XXX:
+          arc = in.read();
+          entry = node->get_entry(arc);
+          if(entry==NULL) {
+            entry_t* e = new entry_t(); // XXX:
+            e->key = key;
+            e->value = value;
+            node->set_entry(arc, e);
+          } else if(entry->type == E_ENTRY) {
+            return;
+          } 
+        }
+      }      
+    }
   private:
     entry_t** root_entries;
     entry_t** new_root_entries;
