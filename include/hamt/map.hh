@@ -51,6 +51,113 @@ namespace hamt {
     Value value;
   };
 
+  struct amt_allocator {
+    fixed_size_allocator<sizeof(void*) * 1> a1;
+    fixed_size_allocator<sizeof(void*) * 2> a2;
+    fixed_size_allocator<sizeof(void*) * 3> a3;
+    fixed_size_allocator<sizeof(void*) * 4> a4;
+    fixed_size_allocator<sizeof(void*) * 5> a5;
+    fixed_size_allocator<sizeof(void*) * 6> a6;
+    fixed_size_allocator<sizeof(void*) * 7> a7;
+    fixed_size_allocator<sizeof(void*) * 8> a8;
+    fixed_size_allocator<sizeof(void*) * 9> a9;
+    fixed_size_allocator<sizeof(void*) * 10> a10;
+    fixed_size_allocator<sizeof(void*) * 11> a11;
+    fixed_size_allocator<sizeof(void*) * 12> a12;
+    fixed_size_allocator<sizeof(void*) * 13> a13;
+    fixed_size_allocator<sizeof(void*) * 14> a14;
+    fixed_size_allocator<sizeof(void*) * 15> a15;
+    fixed_size_allocator<sizeof(void*) * 16> a16;
+    fixed_size_allocator<sizeof(void*) * 17> a17;
+    fixed_size_allocator<sizeof(void*) * 18> a18;
+    fixed_size_allocator<sizeof(void*) * 19> a19;
+    fixed_size_allocator<sizeof(void*) * 20> a20;
+    fixed_size_allocator<sizeof(void*) * 21> a21;
+    fixed_size_allocator<sizeof(void*) * 22> a22;
+    fixed_size_allocator<sizeof(void*) * 23> a23;
+    fixed_size_allocator<sizeof(void*) * 24> a24;
+    fixed_size_allocator<sizeof(void*) * 25> a25;
+    fixed_size_allocator<sizeof(void*) * 26> a26;
+    fixed_size_allocator<sizeof(void*) * 27> a27;
+    fixed_size_allocator<sizeof(void*) * 28> a28;
+    fixed_size_allocator<sizeof(void*) * 29> a29;
+    fixed_size_allocator<sizeof(void*) * 30> a30;
+    fixed_size_allocator<sizeof(void*) * 31> a31;
+
+    void* allocate(unsigned size) {
+      switch(size) {
+      case 1: return a1.allocate();
+      case 2: return a2.allocate();
+      case 3: return a3.allocate();
+      case 4: return a4.allocate();
+      case 5: return a5.allocate();
+      case 6: return a6.allocate();
+      case 7: return a7.allocate();
+      case 8: return a8.allocate();
+      case 9: return a9.allocate();
+      case 10: return a10.allocate();
+      case 11: return a11.allocate();
+      case 12: return a12.allocate();
+      case 13: return a13.allocate();
+      case 14: return a14.allocate();
+      case 15: return a15.allocate();
+      case 16: return a16.allocate();
+      case 17: return a17.allocate();
+      case 18: return a18.allocate();
+      case 19: return a19.allocate();
+      case 20: return a20.allocate();
+      case 21: return a21.allocate();
+      case 22: return a22.allocate();
+      case 23: return a23.allocate();
+      case 24: return a24.allocate();
+      case 25: return a25.allocate();
+      case 26: return a26.allocate();
+      case 27: return a27.allocate();
+      case 28: return a28.allocate();
+      case 29: return a29.allocate();
+      case 30: return a30.allocate();
+      case 31: return a31.allocate();
+      }
+      return NULL;
+    }
+    void release(void* ptr, unsigned size) {
+      switch(size) {
+      case 1: a1.release(ptr); break;
+      case 2: a2.release(ptr); break;
+      case 3: a3.release(ptr); break;
+      case 4: a4.release(ptr); break;
+      case 5: a5.release(ptr); break;
+      case 6: a6.release(ptr); break;
+      case 7: a7.release(ptr); break;
+      case 8: a8.release(ptr); break;
+      case 9: a9.release(ptr); break;
+      case 10: a10.release(ptr); break;
+      case 11: a11.release(ptr); break;
+      case 12: a12.release(ptr); break;
+      case 13: a13.release(ptr); break;
+      case 14: a14.release(ptr); break;
+      case 15: a15.release(ptr); break;
+      case 16: a16.release(ptr); break;
+      case 17: a17.release(ptr); break;
+      case 18: a18.release(ptr); break;
+      case 19: a19.release(ptr); break;
+      case 20: a20.release(ptr); break;
+      case 21: a21.release(ptr); break;
+      case 22: a22.release(ptr); break;
+      case 23: a23.release(ptr); break;
+      case 24: a24.release(ptr); break;
+      case 25: a25.release(ptr); break;
+      case 26: a26.release(ptr); break;
+      case 27: a27.release(ptr); break;
+      case 28: a28.release(ptr); break;
+      case 29: a29.release(ptr); break;
+      case 30: a30.release(ptr); break;
+      case 31: a31.release(ptr); break;
+      }
+    }
+  };
+  amt_allocator amt_alloca;
+
   template <class Entry>
   struct amt_node {
     E_TYPE type;
@@ -97,7 +204,8 @@ namespace hamt {
         entries[e_index] = entry;
       } else {
         assert(type==E_NODE);
-        Entry** new_entries = new Entry*[entries_size+1]; // TODO: allocator
+
+        Entry** new_entries = new (amt_alloca.allocate(entries_size+1)) Entry*[entries_size+1]; // TODO: allocator
         // copy
         unsigned i=0;
         for(; i < e_index; i++) {
@@ -107,7 +215,8 @@ namespace hamt {
         for(; i < entries_size; i++) {
           new_entries[i+1] = entries[i];
         }
-        delete [] entries; // TODO: allocator
+        //delete [] entries; // TODO: allocator
+        amt_alloca.release(entries, entries_size);
 
         bitmap |= (1 << index);
         entries_size++;
@@ -116,7 +225,8 @@ namespace hamt {
     }
 
     void init_entries(unsigned index1, Entry* entry1, unsigned index2, Entry* entry2) {
-      entries = new Entry*[2]; // TODO: allocator
+      //entries = new Entry*[2]; // TODO: allocator
+      entries = new (amt_alloca.allocate(2)) Entry*[2];
       bitmap |= (1 << index1);
       bitmap |= (1 << index2);
       entries_size = 2;
