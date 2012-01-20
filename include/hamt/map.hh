@@ -16,11 +16,14 @@ namespace hamt {
 
   namespace {
     unsigned bitcount(unsigned n) {
+      std::cout << "n: " << n << std::endl;
       n = (n & 0x55555555) + (n >> 1 & 0x55555555);
       n = (n & 0x33333333) + (n >> 2 & 0x33333333);
       n = (n & 0x0f0f0f0f) + (n >> 4 & 0x0f0f0f0f);
       n = (n & 0x00ff00ff) + (n >> 8 & 0x00ff00ff);
-      return (n & 0x0000ffff) + (n >>16 & 0x0000ffff);
+      n = (n & 0x0000ffff) + (n >>16 & 0x0000ffff);
+      std::cout << "n~: " << n << std::endl;
+      return n;
     }
   }
 
@@ -33,6 +36,7 @@ namespace hamt {
   template <class Key, class Value>
   struct entry {
     entry() : type(E_ENTRY) {}
+    entry(const Key& key, const Value& value) : type(E_ENTRY), key(key), value(value) {}
 
     E_TYPE type;
     Key key;
@@ -60,9 +64,26 @@ namespace hamt {
         return NULL;
       return entries[entry_index(index)];
     }
+
+    Entry** get_entry_place(unsigned index) const {
+      if(is_valid_entry(index) == false)
+        return NULL;
+      return &entries[entry_index(index)];      
+    }
+
+    Entry** get_entry_place(unsigned index, bool add) {
+      if(is_valid_entry(index) == false) {
+        if(add == false) {
+          return NULL;
+        } else {
+          set_entry(index, NULL);
+        }
+      }
+      return &entries[entry_index(index)];      
+    }
     
     unsigned entry_index(unsigned index) const {
-      return bitcount(bitmap & ((2 << index)-1));
+      return bitcount(bitmap & ((1 << index)-1));
     }
     
     void set_entry(unsigned index, Entry* entry) {
@@ -70,8 +91,10 @@ namespace hamt {
       if(is_valid_entry(index)) {
         entries[e_index] = entry;
       } else {
+        assert(type==E_NODE);
+        std::cout << "# " << type << ": " << e_index << ", " << index << ", " << entries_size << ", " << bitmap << std::endl;
         Entry** new_entries = new Entry*[entries_size+1]; // TODO: allocator
-
+        std::cout << "#1" << entries_size << std::endl;
         // copy
         unsigned i=0;
         for(; i < e_index; i++) {
@@ -83,14 +106,16 @@ namespace hamt {
         }
         delete [] entries; // TODO: allocator
 
+        std::cout << "old: " << bitmap << std::endl;
         bitmap |= (1 << index);
+        std::cout << "new: " << bitmap << std::endl;
         entries_size++;
         entries = new_entries;
       }
     }
 
     void init_entries(unsigned index1, Entry* entry1, unsigned index2, Entry* entry2) {
-      entries = new Entry[2]; // TODO: allocator
+      entries = new Entry*[2]; // TODO: allocator
       bitmap |= (1 << index1);
       bitmap |= (1 << index2);
       
@@ -112,6 +137,8 @@ namespace hamt {
     unsigned start;
 
     arc_stream(const Key& key) : key(key), hashcode(hash(key)), start(0) {}
+    arc_stream(const Key& key, const arc_stream& o) :
+      key(key), hashcode(hash(key)), start(o.start) {}
     
     unsigned read() {
       return read_n(PER_ARC_BIT_LENGTH);
@@ -119,8 +146,10 @@ namespace hamt {
 
     unsigned read_n(unsigned n) {
       assert(start < sizeof(hashcode_t)*8);
-      unsigned arc = (hashcode >> start) & ((2 << n)-1);
-      start += n;
+      unsigned mask = (1 << n)-1;
+
+      unsigned arc = (hashcode >> start) & mask;
+      start += mask;
       return arc;
     }
 
@@ -153,7 +182,8 @@ namespace hamt {
 
     Value* find(const Key& key) const {
       arc_stream_t in(key);
-      entry_t* entry = find_impl(in);
+      entry_t** place = find_impl2(in);
+      entry_t* entry = *place;
       if(entry == NULL || eql(key, entry->key) == false)
         return NULL;
       return &entry->value;
@@ -161,83 +191,89 @@ namespace hamt {
 
     void set(const Key& key, const Value& value) {
       arc_stream_t in(key);
-      entry_t* entry = find_impl(in);
+      entry_t** place = find_impl2(in, true);
+      entry_t* entry = *place;
+      
       if(entry == NULL) {
         entry_count++;
-        arc_stream_t in2(key);
-        set_if_not_exists_impl(in2, key, value);
+        *place = new entry_t(key, value);
         // TODO: amortized_resize()
       } else {
-        // TODO: maybe collision
-        entry->value = value;
+        if(eql(key, entry->key)) {
+          entry->value = value;
+        } else {
+          std::cout << "- collision" << std::endl;
+          entry_count++;
+
+          arc_stream_t in1(entry->key, in);
+          entry_t* e1 = new entry_t(key, value);
+          *place = (entry_t*)new amt_node_t;
+          resolve_collision(in, e1, in1, entry, (amt_node_t*)*place);
+        }
+      }
+    }
+
+    void resolve_collision(arc_stream_t& in1, entry_t* e1,
+                           arc_stream_t& in2, entry_t* e2, amt_node_t* node) {
+      for(;;) {
+        unsigned arc1 = in1.read();
+        unsigned arc2 = in2.read();
+        std::cout << " " << arc1 << " <=> " << arc2 << std::endl;
+        if(arc1 != arc2) {
+          node->init_entries(arc1, e1, arc2, e2);
+          break;
+        }        
+        
+        amt_node_t* new_node = new amt_node_t;
+        node->set_entry(arc1, (entry_t*)new_node);
+        node = new_node;
       }
     }
 
     unsigned size() const { return entry_count; }
 
   private:
-    entry_t* find_impl(arc_stream_t& in) const {
+    entry_t** find_impl2(arc_stream_t& in) const {
+      return find_impl2(in, false);
+    }
+    
+    entry_t** find_impl2(arc_stream_t& in, bool add) const {
+      entry_t **place;
       unsigned arc = in.read_n(root_bitlen);
-      entry_t **entries;
+
       if(arc < resize_border) {
-        entries = root_entries;
+        place = &root_entries[arc];
       } else {
         arc += (in.read() << root_bitlen);
-        entries = new_root_entries;
+        place = &new_root_entries[arc];
       }
-      entry_t* entry = entries[arc];
+      entry_t* entry = *place;
 
       if(entry==NULL) {
-        return NULL;
+        return place;
       } else if(entry->type == E_ENTRY) {
-        return entry;
+        return place;
       } else {
         for(;;) {
+          std::cout << " - loop" << std::endl;
           amt_node_t* node = (amt_node_t*)entry; // XXX:
           arc = in.read();
-          entry = node->get_entry(arc);
+          std::cout << " - loop2" << std::endl;
+          place = node->get_entry_place(arc, add);
+          std::cout << " - loop3" << std::endl;
+          entry = *place;
+          std::cout << " - loop3" << std::endl;
           if(entry==NULL) {
-            return NULL;
+          std::cout << " - loop4" << std::endl;
+            return place;
           } else if(entry->type == E_ENTRY) {
-            return entry;
+          std::cout << " - loop5" << std::endl;
+            return place;
           } 
         }
       }      
     }
-
-    void set_if_not_exists_impl(arc_stream_t& in, const Key& key, const Value& value) const {
-      unsigned arc = in.read_n(root_bitlen);
-      entry_t **entries;
-      if(arc < resize_border) {
-        entries = root_entries;
-      } else {
-        arc += (in.read() << root_bitlen);
-        entries = new_root_entries;
-      }
-      entry_t* entry = entries[arc];
-
-      if(entry==NULL) {
-        entries[arc] = new entry_t(); // XXX:
-        entries[arc]->key = key;
-        entries[arc]->value = value;
-      } else if(entry->type == E_ENTRY) {
-        return;
-      } else {
-        for(;;) {
-          amt_node_t* node = (amt_node_t*)entry; // XXX:
-          arc = in.read();
-          entry = node->get_entry(arc);
-          if(entry==NULL) {
-            entry_t* e = new entry_t(); // XXX:
-            e->key = key;
-            e->value = value;
-            node->set_entry(arc, e);
-          } else if(entry->type == E_ENTRY) {
-            return;
-          } 
-        }
-      }      
-    }
+    
   private:
     entry_t** root_entries;
     entry_t** new_root_entries;
