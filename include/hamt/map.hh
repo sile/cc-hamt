@@ -166,6 +166,7 @@ namespace hamt {
 
   public:
     map() : root_entries(NULL), new_root_entries(NULL),
+            e_size(1 << 3),
             root_bitlen(3), 
             entry_count(0)
     {
@@ -216,7 +217,7 @@ namespace hamt {
       if(entry == NULL) {
         entry_count++;
         *place = new entry_t(key, value);
-        // TODO: amortized_resize()
+        amortized_resize();
       } else if(entry->type == E_ENTRY) {
         if(eql(key, entry->key)) {
           entry->value = value;
@@ -226,9 +227,45 @@ namespace hamt {
           entry_t* e1 = new entry_t(key, value);
           *place = (entry_t*)new amt_node_t;
           resolve_collision(in, e1, in1, entry, (amt_node_t*)*place);          
+          amortized_resize();
         }
       } else {
         assert(false);
+      }
+    }
+
+    void amortized_resize() {
+      resize_border--;
+      if(resize_border == e_size) {
+        unsigned new_size = e_size<<PER_ARC_BIT_LENGTH;
+        new_root_entries = new entry_t*[new_size];
+        for(unsigned i = 0; i < new_size; i++)
+          new_root_entries[i] = NULL;
+      } else if (resize_border < e_size) {
+        unsigned root_arc = resize_border;
+        entry_t *entry = root_entries[root_arc];
+        unsigned new_root_bitlen = root_bitlen + PER_ARC_BIT_LENGTH;
+        if(entry->type == E_ENTRY) {
+          arc_stream_t in(entry->key);
+          new_root_entries[in.read_n(new_root_bitlen)] = entry;
+          delete entry;
+        } else {
+          amt_node_t* node = (amt_node_t*)entry;
+          for(unsigned i=0; i < 32; i++) { // XXX:
+            if(node->is_valid_entry(i)) {
+              entry_t* sub = node->get_entry(i);
+              new_root_entries[root_arc + (i << root_bitlen)] = sub;
+            }
+          }
+        }
+        root_entries[resize_border] = NULL;
+        if(resize_border == 0) {
+          root_entries = new_root_entries;
+          root_bitlen = new_root_bitlen;
+          e_size <<= PER_ARC_BIT_LENGTH;
+          resize_border = e_size << PER_ARC_BIT_LENGTH;
+          new_root_entries = NULL;
+        }
       }
     }
 
@@ -292,6 +329,7 @@ namespace hamt {
   private:
     entry_t** root_entries;
     entry_t** new_root_entries;
+    unsigned e_size;
     unsigned root_bitlen;
     unsigned resize_border;
     unsigned entry_count;
