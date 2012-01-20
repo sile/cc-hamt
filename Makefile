@@ -9,5 +9,5 @@ bin:
 bin/hamt: src/bin/hamt.cc include/hamt/map.hh
 	${CC} ${CC_FLAGS} -o ${@} ${<}
 
-include/hamt/map.hh: include/hamt/hash.hh
+include/hamt/map.hh: include/hamt/hash.hh include/hamt/eql.hh
 	touch ${@}
