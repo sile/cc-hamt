@@ -15,7 +15,15 @@ namespace hamt {
   const unsigned PER_ARC_BIT_LENGTH = 5;
 
   namespace {
-    unsigned bitcount(unsigned n) {
+    unsigned bitcount(unsigned i)
+    {
+      i = i - ((i >> 1) & 0x55555555);
+      i = (i & 0x33333333) + ((i >> 2) & 0x33333333);
+      return (((i + (i >> 4)) & 0x0F0F0F0F) * 0x01010101) >> 24;
+    }
+    
+    /*
+    unsigned bitcount2(unsigned n) {
       n = (n & 0x55555555) + (n >> 1 & 0x55555555);
       n = (n & 0x33333333) + (n >> 2 & 0x33333333);
       n = (n & 0x0f0f0f0f) + (n >> 4 & 0x0f0f0f0f);
@@ -23,8 +31,9 @@ namespace hamt {
       n = (n & 0x0000ffff) + (n >>16 & 0x0000ffff);
       return n;
     }
+    */
   }
-
+ 
   // XXX:
   enum E_TYPE {
     E_ENTRY,
@@ -184,10 +193,7 @@ namespace hamt {
 
     Value* find(const Key& key) const {
       arc_stream_t in(key);
-      entry_t** place = find_impl2(in);
-      if(place==NULL)
-        return NULL; // XXX:
-      entry_t* entry = *place;
+      entry_t* entry = find_impl3(in);
       if(entry == NULL || eql(key, entry->key) == false)
         return NULL;
       return &entry->value;
@@ -324,6 +330,35 @@ namespace hamt {
           } 
         }
       }      
+    }
+
+    entry_t* find_impl3(arc_stream_t& in) const {
+      unsigned arc = in.read_n(root_bitlen);
+      entry_t* entry;
+      
+      if(arc < resize_border) {
+        entry = root_entries[arc];
+      } else {
+        arc += (in.read() << root_bitlen);
+        entry = new_root_entries[arc];
+      }
+      
+      if(entry==NULL) {
+        return NULL;
+      } else if(entry->type == E_ENTRY) {
+        return entry;
+      } else {
+        for(;;) {
+          amt_node_t* node = (amt_node_t*)entry; // XXX:
+          arc = in.read();
+          entry = node->get_entry(arc);
+          if(entry==NULL) {
+            return NULL;
+          } else if(entry->type == E_ENTRY) {
+            return entry;
+          } 
+        }
+      }
     }
     
   private:
