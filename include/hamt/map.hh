@@ -1,8 +1,9 @@
 #ifndef HAMT_MAP_HH
 #define HAMT_MAP_HH
 
-#include "hamt/hash.hh"
-#include "hamt/eql.hh"
+#include "hash.hh"
+#include "eql.hh"
+#include "allocator.hh"
 #include <cstddef> // for NULL
 
 // for debug
@@ -222,7 +223,7 @@ namespace hamt {
       
       if(entry == NULL) {
         entry_count++;
-        *place = new entry_t(key, value);
+        *place = new (alloca.allocate()) entry_t(key, value);
         amortized_resize();
       } else if(entry->type == E_ENTRY) {
         if(eql(key, entry->key)) {
@@ -371,6 +372,8 @@ namespace hamt {
 
     static const Hash hash;
     static const Eql eql;
+
+    fixed_size_allocator<sizeof(entry_t)> alloca;
   };
 
   template<class Key, class Value, class Hash, class Eql>
