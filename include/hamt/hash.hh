@@ -16,6 +16,8 @@ namespace hamt {
   template<class Key>
   class hash_functor {
   public:
+    hash_functor() {}
+
     unsigned operator()(const Key& key) const {
       return hash(key);
     }
@@ -43,6 +45,10 @@ namespace hamt {
     for(const char* c=key.c_str(); *c != 0; c++)
       h = (h*33) + *c;
     return h;
+  }
+  
+  unsigned double_hash(unsigned hashcode1, unsigned hashcode2, unsigned nth) {
+    return hashcode1 + hashcode2 * nth;
   }
 }
 

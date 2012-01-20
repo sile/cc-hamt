@@ -7,6 +7,8 @@ namespace hamt {
   template<class Key>
   class eql_functor {
   public:
+    eql_functor() {}
+
     bool operator()(const Key& k1, const Key& k2) const {
       return eql(k1,k2);
     }

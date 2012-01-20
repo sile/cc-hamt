@@ -7,6 +7,7 @@
 
 // for debug
 #include <iostream>
+#include <cassert>
 
 namespace hamt {
   typedef unsigned bitmap_t;
@@ -22,21 +23,30 @@ namespace hamt {
       return (n & 0x0000ffff) + (n >>16 & 0x0000ffff);
     }
   }
-  
+
+  // XXX:
+  enum E_TYPE {
+    E_ENTRY,
+    E_NODE
+  };
+
   template <class Key, class Value>
   struct entry {
-    hashcode_t hashcode;
+    entry() : type(E_ENTRY) {}
+
+    E_TYPE type;
     Key key;
     Value value;
   };
 
   template <class Entry>
   struct amt_node {
+    E_TYPE type;
     Entry* entries;
     unsigned entries_size;
     bitmap_t bitmap;
     
-    amt_node() : entries(NULL), entries_size(0), bitmap(0) {}
+    amt_node() : type(E_NODE), entries(NULL), entries_size(0), bitmap(0) {}
     ~amt_node() {
       delete [] entries; // TODO: allocator
     }
@@ -48,7 +58,7 @@ namespace hamt {
     Entry* get_entry(unsigned index) const {
       if(is_valid_entry(index) == false)
         return NULL;
-      return entries[entry_index(index)];
+      return &entries[entry_index(index)];
     }
     
     unsigned entry_index(unsigned index) const {
@@ -94,10 +104,38 @@ namespace hamt {
     }
   };
 
+  // TODO: hashcode2 ...
+  template<class Key, class Hash>
+  struct arc_stream {
+    const Key& key;
+    hashcode_t hashcode;
+    unsigned start;
+
+    arc_stream(const Key& key) : key(key), hashcode(hash(key)), start(0) {}
+    
+    unsigned read() {
+      return read_n(PER_ARC_BIT_LENGTH);
+    }
+
+    unsigned read_n(unsigned n) {
+      assert(start < sizeof(hashcode_t)*8);
+      unsigned arc = (hashcode >> start) & ((2 << n)-1);
+      start += n;
+      return arc;
+    }
+
+    static const Hash hash;
+  };
+  template<class Key, class Hash>
+  const Hash arc_stream<Key,Hash>::hash;
+
   template <class Key, class Value, 
             class Hash=hamt::hash_functor<Key>, class Eql=hamt::eql_functor<Key> >
   class map {
     typedef entry<Key,Value> entry_t;
+    typedef arc_stream<Key, Hash> arc_stream_t;
+    typedef amt_node<entry_t> amt_node_t;
+
   public:
     map() : root_entries(NULL), new_root_entries(NULL),
             root_bitlen(3), 
@@ -105,21 +143,57 @@ namespace hamt {
     {
       const unsigned init_size = 1 << root_bitlen;
       resize_border = init_size << PER_ARC_BIT_LENGTH;
-      root_entries = new entry_t[init_size];
+      root_entries = new entry_t*[init_size];
     }
     
     ~map() {
       delete [] root_entries;
       delete [] new_root_entries;
     }
-      
+
     Value* find(const Key& key) const {
-      return NULL;
+      arc_stream_t in(key);
+      entry_t* entry = find_impl(in);
+      if(entry == NULL || eql(key, entry->key) == false)
+        return NULL;
+      return &entry->value;
+    }
+
+    unsigned size() const { return entry_count; }
+
+  private:
+    entry_t* find_impl(arc_stream_t& in) const {
+      unsigned arc = in.read_n(root_bitlen);
+      entry_t **entries;
+      if(arc < resize_border) {
+        entries = root_entries;
+      } else {
+        arc += (in.read() << root_bitlen);
+        entries = new_root_entries;
+      }
+      entry_t* entry = entries[arc];
+      //entry_t** entry_place = &entries[arc];
+      if(entry==NULL) {
+        return NULL;
+      } else if(entry->type == E_ENTRY) {
+        return entry;
+      } else {
+        for(;;) {
+          amt_node_t* node = (amt_node_t*)entry; // XXX:
+          arc = in.read();
+          entry = node->get_entry(arc);
+          if(entry==NULL) {
+            return NULL;
+          } else if(entry->type == E_ENTRY) {
+            return entry;
+          } 
+        }
+      }      
     }
 
   private:
-    entry_t* root_entries;
-    entry_t* new_root_entries;
+    entry_t** root_entries;
+    entry_t** new_root_entries;
     unsigned root_bitlen;
     unsigned resize_border;
     unsigned entry_count;
@@ -127,6 +201,12 @@ namespace hamt {
     static const Hash hash;
     static const Eql eql;
   };
+
+  template<class Key, class Value, class Hash, class Eql>
+  const Hash map<Key,Value,Hash,Eql>::hash;
+
+  template<class Key, class Value, class Hash, class Eql>
+  const Eql map<Key,Value,Hash,Eql>::eql;
 }
 
 #endif
