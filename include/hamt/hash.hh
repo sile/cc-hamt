@@ -21,6 +21,10 @@ namespace hamt {
     unsigned operator()(const Key& key) const {
       return hash(key);
     }
+
+    unsigned operator()(const Key& key, unsigned n) const {
+      return hash(key * n); // XXX:
+    }
   };
 
   unsigned hash(int key) {

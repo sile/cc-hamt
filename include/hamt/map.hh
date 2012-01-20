@@ -16,13 +16,11 @@ namespace hamt {
 
   namespace {
     unsigned bitcount(unsigned n) {
-      std::cout << "n: " << n << std::endl;
       n = (n & 0x55555555) + (n >> 1 & 0x55555555);
       n = (n & 0x33333333) + (n >> 2 & 0x33333333);
       n = (n & 0x0f0f0f0f) + (n >> 4 & 0x0f0f0f0f);
       n = (n & 0x00ff00ff) + (n >> 8 & 0x00ff00ff);
       n = (n & 0x0000ffff) + (n >>16 & 0x0000ffff);
-      std::cout << "n~: " << n << std::endl;
       return n;
     }
   }
@@ -50,7 +48,8 @@ namespace hamt {
     unsigned entries_size;
     bitmap_t bitmap;
     
-    amt_node() : type(E_NODE), entries(NULL), entries_size(0), bitmap(0) {}
+    amt_node() : type(E_NODE), entries(NULL), entries_size(0), bitmap(0) {
+    }
     ~amt_node() {
       delete [] entries; // TODO: allocator
     }
@@ -92,9 +91,7 @@ namespace hamt {
         entries[e_index] = entry;
       } else {
         assert(type==E_NODE);
-        std::cout << "# " << type << ": " << e_index << ", " << index << ", " << entries_size << ", " << bitmap << std::endl;
         Entry** new_entries = new Entry*[entries_size+1]; // TODO: allocator
-        std::cout << "#1" << entries_size << std::endl;
         // copy
         unsigned i=0;
         for(; i < e_index; i++) {
@@ -106,9 +103,12 @@ namespace hamt {
         }
         delete [] entries; // TODO: allocator
 
-        std::cout << "old: " << bitmap << std::endl;
+        unsigned o = bitcount(bitmap);
+        assert(o == entries_size);
+
         bitmap |= (1 << index);
-        std::cout << "new: " << bitmap << std::endl;
+        unsigned nn = bitcount(bitmap);
+        assert(o+1 == nn);
         entries_size++;
         entries = new_entries;
       }
@@ -118,6 +118,7 @@ namespace hamt {
       entries = new Entry*[2]; // TODO: allocator
       bitmap |= (1 << index1);
       bitmap |= (1 << index2);
+      entries_size = 2;
       
       if(index1 < index2) {
         entries[0] = entry1;
@@ -135,21 +136,29 @@ namespace hamt {
     const Key& key;
     hashcode_t hashcode;
     unsigned start;
+    unsigned rehash_count;
 
-    arc_stream(const Key& key) : key(key), hashcode(hash(key)), start(0) {}
+    arc_stream(const Key& key) : key(key), hashcode(hash(key)), start(0),
+                                 rehash_count(1) {}
     arc_stream(const Key& key, const arc_stream& o) :
-      key(key), hashcode(hash(key)), start(o.start) {}
+      key(key), hashcode(hash(key, o.rehash_count)), start(o.start), rehash_count(o.rehash_count) {
+      
+    }
     
     unsigned read() {
       return read_n(PER_ARC_BIT_LENGTH);
     }
 
     unsigned read_n(unsigned n) {
-      assert(start < sizeof(hashcode_t)*8);
-      unsigned mask = (1 << n)-1;
+      if(start >= sizeof(hashcode_t)*8) {
+        rehash_count++;
+        hashcode = hash(key, rehash_count);
+        start = 0;
+      }
 
+      unsigned mask = (1 << n)-1;
       unsigned arc = (hashcode >> start) & mask;
-      start += mask;
+      start += n;
       return arc;
     }
 
@@ -202,7 +211,6 @@ namespace hamt {
         if(eql(key, entry->key)) {
           entry->value = value;
         } else {
-          std::cout << "- collision" << std::endl;
           entry_count++;
 
           arc_stream_t in1(entry->key, in);
@@ -218,7 +226,6 @@ namespace hamt {
       for(;;) {
         unsigned arc1 = in1.read();
         unsigned arc2 = in2.read();
-        std::cout << " " << arc1 << " <=> " << arc2 << std::endl;
         if(arc1 != arc2) {
           node->init_entries(arc1, e1, arc2, e2);
           break;
@@ -255,19 +262,13 @@ namespace hamt {
         return place;
       } else {
         for(;;) {
-          std::cout << " - loop" << std::endl;
           amt_node_t* node = (amt_node_t*)entry; // XXX:
           arc = in.read();
-          std::cout << " - loop2" << std::endl;
           place = node->get_entry_place(arc, add);
-          std::cout << " - loop3" << std::endl;
           entry = *place;
-          std::cout << " - loop3" << std::endl;
           if(entry==NULL) {
-          std::cout << " - loop4" << std::endl;
             return place;
           } else if(entry->type == E_ENTRY) {
-          std::cout << " - loop5" << std::endl;
             return place;
           } 
         }
