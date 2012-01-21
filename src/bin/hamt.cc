@@ -140,8 +140,8 @@ void unorderedmap_bench(int data1[DSIZE], int data2[DSIZE]) {
 }
 
 int main(int argc, char** argv) {
-  int data1[DSIZE];
-  int data2[DSIZE];
+  int* data1 = new int[DSIZE];
+  int* data2 = new int[DSIZE];
 
   for(int i=0; i < DSIZE; i++) {
     data1[i] = rand() % (DSIZE*5);

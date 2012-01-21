@@ -13,52 +13,73 @@
 namespace hamt {
   typedef unsigned bitmap_t;
   typedef unsigned hashcode_t;
-  const unsigned PER_ARC_BIT_LENGTH = 5;
+  const unsigned PER_AMT_NODE_BIT_LENGTH = 5;
 
   namespace {
-    unsigned bitcount(unsigned i)
-    {
+    // 1bitの数を数える
+    unsigned bitcount(unsigned i) {
       i = i - ((i >> 1) & 0x55555555);
       i = (i & 0x33333333) + ((i >> 2) & 0x33333333);
       return (((i + (i >> 4)) & 0x0F0F0F0F) * 0x01010101) >> 24;
     }
-    
-    /*
-    unsigned bitcount2(unsigned n) {
-      n = (n & 0x55555555) + (n >> 1 & 0x55555555);
-      n = (n & 0x33333333) + (n >> 2 & 0x33333333);
-      n = (n & 0x0f0f0f0f) + (n >> 4 & 0x0f0f0f0f);
-      n = (n & 0x00ff00ff) + (n >> 8 & 0x00ff00ff);
-      n = (n & 0x0000ffff) + (n >>16 & 0x0000ffff);
-      return n;
-    }
-    */
   }
- 
-  // XXX:
-  enum E_TYPE {
-    E_ENTRY,
-    E_NODE
-  };
-
   template <class Key, class Value>
   struct entry {
-    entry() : type(E_ENTRY) {}
-    entry(const Key& key, const Value& value) : type(E_ENTRY), key(key), value(value) {}
+    entry() {} // XXX:
+    entry(const Key& key, const Value& value) : key(key), value(value) {}
 
-    E_TYPE type;
     Key key;
     Value value;
   };
 
   template <class Entry>
   struct amt_node {
-    E_TYPE type;
-    Entry** entries;
+    union value {
+      amt_node* node;
+      Entry* entry;
+      unsigned ptrval;
+
+      bool is_node() const { return ptrval & 1; }
+      bool is_entry() const { return is_node()==false; }
+      bool is_null() const { return node == NULL; }
+
+      static value from_node(amt_node* node) {
+        value v;
+        v.node = node;
+        assert(!(v.ptrval & 1));
+        v.ptrval++; // 最下位ビットを1にする
+        return v;
+      }
+
+      static value from_entry(Entry* entry) {
+        value v;
+        v.entry = entry;
+        return v;
+      }
+
+      static value null() {
+        value v;
+        v.node = NULL;
+        return v;
+      }
+      
+      amt_node* to_node() {
+        assert(ptrval & 1);
+        ptrval--; // 最下位ビットを0に戻す
+        return node;
+      }
+
+      Entry* to_entry() const {
+        return entry;
+      }
+      
+    };
+    
+    value* entries;
     unsigned entries_size;
     bitmap_t bitmap;
     
-    amt_node() : type(E_NODE), entries(NULL), entries_size(0), bitmap(0) {
+    amt_node() : entries(NULL), entries_size(0), bitmap(0) {
     }
     ~amt_node() {
       delete [] entries;
@@ -68,20 +89,15 @@ namespace hamt {
       return (bitmap >> index) & 1;
     }
 
-    Entry* get_entry(unsigned index) const {
+    value get_entry(unsigned index) const {
       if(is_valid_entry(index) == false)
-        return NULL;
+        return value::null();
       return entries[entry_index(index)];
     }
 
-    Entry** get_entry_place(unsigned index, bool add) {
+    value* get_entry_place(unsigned index) {
       if(is_valid_entry(index) == false) {
-        if(add == false) {
-          return NULL;
-        } else {
-          assert(type==E_NODE);
-          set_entry(index, NULL);
-        }
+        set_entry(index, value::null());
       }
       return &entries[entry_index(index)];      
     }
@@ -90,13 +106,11 @@ namespace hamt {
       return bitcount(bitmap & ((1 << index)-1));
     }
     
-    void set_entry(unsigned index, Entry* entry) {
+    void set_entry(unsigned index, value entry) {
       const unsigned e_index = entry_index(index);
       if(is_valid_entry(index)) {
-        assert(entry->type <= E_NODE);
         entries[e_index] = entry;
       } else {
-        assert(type==E_NODE);
         if(entries_size % 4 != 0) {
           unsigned i = entries_size;
           for(; i > e_index; i--) {
@@ -104,7 +118,7 @@ namespace hamt {
           }
           entries[i] = entry;
         } else {
-          Entry** new_entries = new Entry*[(entries_size|3) + 1]; 
+          value* new_entries = new value[(entries_size|3) + 1]; 
           
           // copy
           unsigned i=0;
@@ -125,8 +139,8 @@ namespace hamt {
       }
     }
 
-    void init_entries(unsigned index1, Entry* entry1, unsigned index2, Entry* entry2) {
-      entries = new Entry*[4];
+    void init_entries(unsigned index1, value entry1, unsigned index2, value entry2) {
+      entries = new value[4];
       bitmap |= (1 << index1);
       bitmap |= (1 << index2);
       entries_size = 2;
@@ -156,7 +170,7 @@ namespace hamt {
     }
     
     unsigned read() {
-      return read_n(PER_ARC_BIT_LENGTH);
+      return read_n(PER_AMT_NODE_BIT_LENGTH);
     }
 
     unsigned read_n(unsigned n) {
@@ -183,6 +197,7 @@ namespace hamt {
     typedef entry<Key,Value> entry_t;
     typedef arc_stream<Key, Hash> arc_stream_t;
     typedef amt_node<entry_t> amt_node_t;
+    typedef typename amt_node_t::value amt_val_t;
 
   public:
     map() : root_entries(NULL), new_root_entries(NULL),
@@ -191,10 +206,10 @@ namespace hamt {
             entry_count(0)
     {
       const unsigned init_size = 1 << root_bitlen;
-      resize_border = init_size << PER_ARC_BIT_LENGTH;
-      root_entries = new entry_t*[init_size];
+      resize_border = init_size << PER_AMT_NODE_BIT_LENGTH;
+      root_entries = new amt_val_t[init_size];
       for(unsigned i=0; i < init_size; i++)
-        root_entries[i] = NULL;
+        root_entries[i] = amt_val_t::null();
     }
     
     ~map() {
@@ -204,22 +219,11 @@ namespace hamt {
 
     Value* find(const Key& key) const {
       arc_stream_t in(key);
-      entry_t* entry = find_impl3(in);
-      if(entry == NULL || eql(key, entry->key) == false)
+      amt_val_t e = *find_impl2(in);
+      if(e.is_null() || eql(key, e.to_entry()->key) == false)
         return NULL;
-      return &entry->value;
+      return &e.to_entry()->value;
     }
-
-    /*
-    Value& operator[](const Key& key) {
-      Value* val = find(key);
-      if(val)
-        return *val;
-      Value v;
-      set(key, v);
-      return *find(key);
-    }
-    */
 
     unsigned erase(const Key& key) {
       return 0;
@@ -227,60 +231,59 @@ namespace hamt {
 
     void set(const Key& key, const Value& value) {
       arc_stream_t in(key);
-      entry_t** place = find_impl2(in, true);
-      assert(place);
-      entry_t* entry = *place;
+      amt_val_t* place = find_impl2(in);
+      entry_t* entry = place->to_entry();
       
       if(entry == NULL) {
         entry_count++;
-        *place = new (alloca.allocate()) entry_t(key, value);
+        *place = amt_val_t::from_entry(new (alloca.allocate()) entry_t(key, value));
         amortized_resize();
-      } else if(entry->type == E_ENTRY) {
+      } else {
         if(eql(key, entry->key)) {
           entry->value = value;
         } else {
           entry_count++;
           arc_stream_t in1(entry->key, in);
           entry_t* e1 = new entry_t(key, value);
-          *place = (entry_t*)new amt_node_t;
-          resolve_collision(in, e1, in1, entry, (amt_node_t*)*place);          
+
+          *place = amt_val_t::from_node(new amt_node_t);
+          resolve_collision(in, e1, in1, entry, place->to_node());
           amortized_resize();
         }
-      } else {
-        assert(false);
       }
     }
 
     void amortized_resize() {
       resize_border--;
       if(resize_border == e_size) {
-        unsigned new_size = e_size<<PER_ARC_BIT_LENGTH;
-        new_root_entries = new entry_t*[new_size];
+        unsigned new_size = e_size<<PER_AMT_NODE_BIT_LENGTH;
+        new_root_entries = new amt_val_t[new_size];
         for(unsigned i = 0; i < new_size; i++)
-          new_root_entries[i] = NULL;
+          new_root_entries[i] = amt_val_t::null();
       } else if (resize_border < e_size) {
         unsigned root_arc = resize_border;
-        entry_t *entry = root_entries[root_arc];
-        unsigned new_root_bitlen = root_bitlen + PER_ARC_BIT_LENGTH;
-        if(entry->type == E_ENTRY) {
+        amt_val_t val = root_entries[root_arc];
+        unsigned new_root_bitlen = root_bitlen + PER_AMT_NODE_BIT_LENGTH;
+        if(val.is_entry()) {
+          entry_t* entry = val.to_entry();
           arc_stream_t in(entry->key);
-          new_root_entries[in.read_n(new_root_bitlen)] = entry;
-          delete entry;
+          new_root_entries[in.read_n(new_root_bitlen)] = val;
         } else {
-          amt_node_t* node = (amt_node_t*)entry;
+          amt_node_t* node = val.to_node();
           for(unsigned i=0; i < 32; i++) { // XXX:
             if(node->is_valid_entry(i)) {
-              entry_t* sub = node->get_entry(i);
-              new_root_entries[root_arc + (i << root_bitlen)] = sub;
+              new_root_entries[root_arc + (i << root_bitlen)] = node->get_entry(i);
             }
           }
+          delete node;
         }
-        root_entries[resize_border] = NULL;
+        
+        root_entries[resize_border] = amt_val_t::null();
         if(resize_border == 0) {
           root_entries = new_root_entries;
           root_bitlen = new_root_bitlen;
-          e_size <<= PER_ARC_BIT_LENGTH;
-          resize_border = e_size << PER_ARC_BIT_LENGTH;
+          e_size <<= PER_AMT_NODE_BIT_LENGTH;
+          resize_border = e_size << PER_AMT_NODE_BIT_LENGTH;
           new_root_entries = NULL;
         }
       }
@@ -292,13 +295,12 @@ namespace hamt {
         unsigned arc1 = in1.read();
         unsigned arc2 = in2.read();
         if(arc1 != arc2) {
-          node->init_entries(arc1, e1, arc2, e2);
+          node->init_entries(arc1, amt_val_t::from_entry(e1), arc2, amt_val_t::from_entry(e2));
           break;
         }        
         
         amt_node_t* new_node = new amt_node_t;
-        assert(node->type==E_NODE);
-        node->set_entry(arc1, (entry_t*)new_node);
+        node->set_entry(arc1, amt_val_t::from_node(new_node));
         node = new_node;
       }
     }
@@ -306,12 +308,8 @@ namespace hamt {
     unsigned size() const { return entry_count; }
 
   private:
-    entry_t** find_impl2(arc_stream_t& in) const {
-      return find_impl2(in, false);
-    }
-    
-    entry_t** find_impl2(arc_stream_t& in, bool add) const {
-      entry_t **place;
+    amt_val_t* find_impl2(arc_stream_t& in) const {
+      amt_val_t* place;
       unsigned arc = in.read_n(root_bitlen);
 
       if(arc < resize_border) {
@@ -320,61 +318,27 @@ namespace hamt {
         arc += (in.read() << root_bitlen);
         place = &new_root_entries[arc];
       }
-      entry_t* entry = *place;
-
-      if(entry==NULL) {
+      
+      if(place->is_null()) {
         return place;
-      } else if(entry->type == E_ENTRY) {
+      } else if(place->is_entry()) {
         return place;
       } else {
         for(;;) {
-          amt_node_t* node = (amt_node_t*)entry; // XXX:
+          amt_node_t* node = place->to_node();
           arc = in.read();
-          place = node->get_entry_place(arc, add);
-          if(place==NULL)
-            return NULL;
-          entry = *place;
-          if(entry==NULL) {
+          place = node->get_entry_place(arc);
+          if(place->is_null())
             return place;
-          } else if(entry->type == E_ENTRY) {
+          if(place->is_entry())
             return place;
-          } 
         }
       }      
     }
 
-    entry_t* find_impl3(arc_stream_t& in) const {
-      unsigned arc = in.read_n(root_bitlen);
-      entry_t* entry;
-      
-      if(arc < resize_border) {
-        entry = root_entries[arc];
-      } else {
-        arc += (in.read() << root_bitlen);
-        entry = new_root_entries[arc];
-      }
-      
-      if(entry==NULL) {
-        return NULL;
-      } else if(entry->type == E_ENTRY) {
-        return entry;
-      } else {
-        for(;;) {
-          amt_node_t* node = (amt_node_t*)entry; // XXX:
-          arc = in.read();
-          entry = node->get_entry(arc);
-          if(entry==NULL) {
-            return NULL;
-          } else if(entry->type == E_ENTRY) {
-            return entry;
-          } 
-        }
-      }
-    }
-    
   private:
-    entry_t** root_entries;
-    entry_t** new_root_entries;
+    amt_val_t* root_entries;
+    amt_val_t* new_root_entries;
     unsigned e_size;
     unsigned root_bitlen;
     unsigned resize_border;
