@@ -72,10 +72,10 @@ namespace hamt {
     };
     
     value* entries;
-    unsigned entries_size;
     bitmap_t bitmap;
+    unsigned char entries_size;
     
-    amt_node() : entries(NULL), entries_size(0), bitmap(0) {
+    amt_node() : entries(NULL),bitmap(0), entries_size(0) {
     }
     ~amt_node() {
       delete [] entries;
@@ -199,6 +199,13 @@ namespace hamt {
     }
 
     unsigned erase(const Key& key) {
+      arc_stream_t in(key);
+      amt_val_t* place = find_impl2(in);
+      if(place->is_null() == false) {
+        entry_count--;
+        *place = amt_val_t::null();
+        return 1;
+      }
       return 0;
     }
 
