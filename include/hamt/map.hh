@@ -4,11 +4,8 @@
 #include "hash.hh"
 #include "eql.hh"
 #include "allocator.hh"
-#include <cstddef> // for NULL
-
-// for debug
-#include <iostream>
-#include <cassert>
+#include <cstddef> 
+#include <cstdlib>
 
 namespace hamt {
   typedef unsigned bitmap_t;
@@ -23,98 +20,83 @@ namespace hamt {
       return (((i + (i >> 4)) & 0x0F0F0F0F) * 0x01010101) >> 24;
     }
   }
+  
   template <class Key, class Value>
-  struct entry { // => amt_leaf?
-    entry(const Key& key, const Value& value) : key(key), value(value) {}
+  struct amt_leaf {
+    amt_leaf(const Key& key, const Value& value) : key(key), value(value) {}
 
     Key key;
     Value value;
   };
 
-  template <class Entry>
-  struct amt_node {
-    union value {
+  template <class Leaf>
+  class amt_node {
+  public:
+    union entry {
       amt_node* node;
-      Entry* entry;
+      Leaf* leaf;
       unsigned ptrval;
-
+      
       bool is_node() const { return ptrval & 1; }
-      bool is_entry() const { return is_node()==false; }
-      bool is_null() const { return entry == NULL; }
+      bool is_leaf() const { return is_node()==false; }
+      bool is_null() const { return leaf == NULL; }
 
-      static value from_node(amt_node* node) {
-        value v;
-        v.node = node;
-        v.ptrval++; // 最下位ビットを1にする
-        return v;
+      static entry from_node(amt_node* node) {
+        entry e;
+        e.node = node;
+        e.ptrval++; // 最下位ビットを1にする
+        return e;
       }
 
-      static value from_entry(Entry* entry) {
-        value v;
-        v.entry = entry;
-        return v;
-      }
-
-      static value null() {
-        return from_entry(NULL);
-      }
-      
       amt_node* to_node() {
-        value v = *this;
-        v.ptrval--;// 最下位ビットを0に戻す
-        return v.node;
+        entry e = *this;
+        e.ptrval--; // 最下位ビットを0に戻す
+        return e.node;
       }
 
-      Entry* to_entry() const {
-        return entry;
+      static entry from_leaf(Leaf* leaf) {
+        entry e;
+        e.leaf = leaf;
+        return e;
       }
-      
+
+      Leaf* to_leaf() const { return leaf; }
+
+      static entry null() { return from_leaf(NULL); }
     };
-    
-    value* entries;
-    bitmap_t bitmap;
-    unsigned char entries_size;
-    
-    amt_node() : entries(NULL),bitmap(0), entries_size(0) {
-    }
-    ~amt_node() {
-      delete [] entries;
+
+  public:
+    amt_node() : entries(NULL),bitmap(0), entries_size(0) {}
+    ~amt_node() { 
+      free(entries);
     }
 
-    bool is_valid_entry(unsigned index) const {
-      return (bitmap >> index) & 1;
-    }
-
-    value get_entry(unsigned index) const {
+    entry get_entry(unsigned index) const {
       if(is_valid_entry(index) == false)
-        return value::null();
+        return entry::null();
       return entries[entry_index(index)];
     }
 
-    value* get_entry_place(unsigned index) {
-      if(is_valid_entry(index) == false) {
-        set_entry(index, value::null());
-      }
+    entry* get_entry_place(unsigned index) {
+      if(is_valid_entry(index) == false)
+        set_entry(index, entry::null());
       return &entries[entry_index(index)];      
     }
     
-    unsigned entry_index(unsigned index) const {
-      return bitcount(bitmap & ((1 << index)-1));
-    }
-    
-    void set_entry(unsigned index, value entry) {
+    void set_entry(unsigned index, entry enty) {
       const unsigned e_index = entry_index(index);
-      entries = (value*)realloc(entries, sizeof(value) * (entries_size+1));
-      for(unsigned i = entries_size; i > e_index; i--) {
+      entries = reinterpret_cast<entry*>(realloc(entries, sizeof(entry) * (entries_size+1)));
+
+      for(unsigned i = entries_size; i > e_index; i--) 
         entries[i] = entries[i-1];
-      }
-      entries[e_index] = entry;
+
+      entries[e_index] = enty;
       bitmap |= (1 << index);
       entries_size++;
     }
     
-    void init_entries(unsigned index1, value entry1, unsigned index2, value entry2) {
-      entries = new value[2];
+    void init_entries(unsigned index1, entry entry1, unsigned index2, entry entry2) {
+      entries = reinterpret_cast<entry*>(malloc(sizeof(entry)*2));
       bitmap |= (1 << index1);
       bitmap |= (1 << index2);
       entries_size = 2;
@@ -127,27 +109,36 @@ namespace hamt {
         entries[1] = entry1;
       }
     }
+
+    bool is_valid_entry(unsigned index) const {
+      return (bitmap >> index) & 1;
+    }
+
+    unsigned entry_index(unsigned index) const {
+      return bitcount(bitmap & ((1 << index)-1));
+    }
+
+  private:
+    entry* entries;
+    bitmap_t bitmap;
+    unsigned char entries_size;
   };
 
   template<class Key, class Hash>
-  struct arc_stream {
-    const Key& key;
-    hashcode_t hashcode;
-    unsigned start;
-    unsigned rehash_count;
+  class arc_stream {
+  public:
+    arc_stream(const Key& key) 
+      : key(key), rehash_count(0), hashcode(hash(key, rehash_count)), start(0) {}
+        
+    arc_stream(const Key& key, const arc_stream& o) 
+      : key(key), rehash_count(o.rehash_count), hashcode(hash(key, rehash_count)), start(o.start) {}
 
-    arc_stream(const Key& key) : key(key), hashcode(hash(key)), start(0),
-                                 rehash_count(1) {}
-    arc_stream(const Key& key, const arc_stream& o) :
-      key(key), hashcode(hash(key, o.rehash_count)), start(o.start), rehash_count(o.rehash_count) {
-    }
-    
     unsigned read() {
       return read_n(PER_AMT_NODE_BIT_LENGTH);
     }
 
     unsigned read_n(unsigned n) {
-      if(start >= sizeof(hashcode_t)*8) {
+      if(start > sizeof(hashcode_t)*8) {
         rehash_count++;
         hashcode = hash(key, rehash_count);
         start = 0;
@@ -159,6 +150,12 @@ namespace hamt {
       return arc;
     }
 
+  private:
+    const Key& key;
+    unsigned rehash_count;
+    hashcode_t hashcode;
+    unsigned start;
+
     static const Hash hash;
   };
   template<class Key, class Hash>
@@ -167,22 +164,22 @@ namespace hamt {
   template <class Key, class Value, 
             class Hash=hamt::hash_functor<Key>, class Eql=hamt::eql_functor<Key> >
   class map {
-    typedef entry<Key,Value> entry_t;
     typedef arc_stream<Key, Hash> arc_stream_t;
-    typedef amt_node<entry_t> amt_node_t;
-    typedef typename amt_node_t::value amt_val_t;
+    typedef amt_leaf<Key,Value> amt_leaf_t;
+    typedef amt_node<amt_leaf_t> amt_node_t;
+    typedef typename amt_node_t::entry amt_entry_t;
 
   public:
     map() : root_entries(NULL), new_root_entries(NULL),
-            e_size(1 << 3),
             root_bitlen(3), 
-            entry_count(0)
+            entries_size(1 << root_bitlen),
+            entry_count(0) 
     {
-      const unsigned init_size = e_size;
+      const unsigned init_size = entries_size;
       resize_border = init_size << PER_AMT_NODE_BIT_LENGTH;
-      root_entries = new amt_val_t[init_size];
+      root_entries = new amt_entry_t[init_size];
       for(unsigned i=0; i < init_size; i++)
-        root_entries[i] = amt_val_t::null();
+        root_entries[i] = amt_entry_t::null();
     }
     
     ~map() {
@@ -192,18 +189,18 @@ namespace hamt {
 
     Value* find(const Key& key) const {
       arc_stream_t in(key);
-      amt_val_t e = find_impl3(in);
-      if(e.is_null() || eql(key, e.to_entry()->key) == false)
+      amt_entry_t e = find_impl3(in);
+      if(e.is_null() || eql(key, e.to_leaf()->key) == false)
         return NULL;
-      return &e.to_entry()->value;
+      return &e.to_leaf()->value;
     }
 
     unsigned erase(const Key& key) {
       arc_stream_t in(key);
-      amt_val_t* place = find_impl2(in);
+      amt_entry_t* place = find_impl2(in);
       if(place->is_null() == false) {
         entry_count--;
-        *place = amt_val_t::null();
+        *place = amt_entry_t::null();
         return 1;
       }
       return 0;
@@ -211,41 +208,40 @@ namespace hamt {
 
     void set(const Key& key, const Value& value) {
       arc_stream_t in(key);
-      amt_val_t* place = find_impl2(in);
+      amt_entry_t* place = find_impl2(in);
       if(place->is_null()) {
-        entry_count++;
-        *place = amt_val_t::from_entry(new (alloca.allocate()) entry_t(key, value));
-        amortized_resize();
+        *place = amt_entry_t::from_leaf(new (alloca.allocate()) amt_leaf_t(key, value));
       } else {
-        entry_t* entry = place->to_entry();
+        amt_leaf_t* entry = place->to_leaf();
         
         if(eql(key, entry->key)) {
           entry->value = value;
+          return;
         } else {
-          entry_count++;
           arc_stream_t in1(entry->key, in);
-          entry_t* e1 = new entry_t(key, value);
-
-          *place = amt_val_t::from_node(new amt_node_t);
+          amt_leaf_t* e1 = new amt_leaf_t(key, value);
+          
+          *place = amt_entry_t::from_node(new amt_node_t);
           resolve_collision(in, e1, in1, entry, place->to_node());
-          amortized_resize();
         }
       }
+      entry_count++;      
+      amortized_resize();
     }
 
     void amortized_resize() {
       resize_border--;
-      if(resize_border == e_size) {
-        unsigned new_size = e_size<<PER_AMT_NODE_BIT_LENGTH;
-        new_root_entries = new amt_val_t[new_size];
+      if(resize_border == entries_size) {
+        unsigned new_size = entries_size<<PER_AMT_NODE_BIT_LENGTH;
+        new_root_entries = new amt_entry_t[new_size];
         for(unsigned i = 0; i < new_size; i++)
-          new_root_entries[i] = amt_val_t::null();
-      } else if (resize_border < e_size) {
+          new_root_entries[i] = amt_entry_t::null();
+      } else if (resize_border < entries_size) {
         unsigned root_arc = resize_border;
-        amt_val_t val = root_entries[root_arc];
+        amt_entry_t val = root_entries[root_arc];
         unsigned new_root_bitlen = root_bitlen + PER_AMT_NODE_BIT_LENGTH;
-        if(val.is_entry()) {
-          entry_t* entry = val.to_entry();
+        if(val.is_leaf()) {
+          amt_leaf_t* entry = val.to_leaf();
           arc_stream_t in(entry->key);
           new_root_entries[in.read_n(new_root_bitlen)] = val;
         } else {
@@ -258,29 +254,29 @@ namespace hamt {
           delete node;
         }
         
-        root_entries[resize_border] = amt_val_t::null();
+        root_entries[resize_border] = amt_entry_t::null();
         if(resize_border == 0) {
           root_entries = new_root_entries;
           root_bitlen = new_root_bitlen;
-          e_size <<= PER_AMT_NODE_BIT_LENGTH;
-          resize_border = e_size << PER_AMT_NODE_BIT_LENGTH;
+          entries_size <<= PER_AMT_NODE_BIT_LENGTH;
+          resize_border = entries_size << PER_AMT_NODE_BIT_LENGTH;
           new_root_entries = NULL;
         }
       }
     }
 
-    void resolve_collision(arc_stream_t& in1, entry_t* e1,
-                           arc_stream_t& in2, entry_t* e2, amt_node_t* node) {
+    void resolve_collision(arc_stream_t& in1, amt_leaf_t* e1,
+                           arc_stream_t& in2, amt_leaf_t* e2, amt_node_t* node) {
       for(;;) {
         unsigned arc1 = in1.read();
         unsigned arc2 = in2.read();
         if(arc1 != arc2) {
-          node->init_entries(arc1, amt_val_t::from_entry(e1), arc2, amt_val_t::from_entry(e2));
+          node->init_entries(arc1, amt_entry_t::from_leaf(e1), arc2, amt_entry_t::from_leaf(e2));
           break;
         }        
         
         amt_node_t* new_node = new amt_node_t;
-        node->set_entry(arc1, amt_val_t::from_node(new_node));
+        node->set_entry(arc1, amt_entry_t::from_node(new_node));
         node = new_node;
       }
     }
@@ -288,8 +284,8 @@ namespace hamt {
     unsigned size() const { return entry_count; }
 
   private:
-    amt_val_t* find_impl2(arc_stream_t& in) const {
-      amt_val_t* place;
+    amt_entry_t* find_impl2(arc_stream_t& in) const {
+      amt_entry_t* place;
       unsigned arc = in.read_n(root_bitlen);
 
       if(arc < resize_border) {
@@ -299,7 +295,7 @@ namespace hamt {
         place = &new_root_entries[arc];
       }
 
-      while(!(place->is_null() || place->is_entry())) {
+      while(!(place->is_null() || place->is_leaf())) {
         arc = in.read();
         place = place->to_node()->get_entry_place(arc);
       }  
@@ -307,8 +303,8 @@ namespace hamt {
       return place;
     }
 
-    amt_val_t find_impl3(arc_stream_t& in) const {
-      amt_val_t place;
+    amt_entry_t find_impl3(arc_stream_t& in) const {
+      amt_entry_t place;
       unsigned arc = in.read_n(root_bitlen);
 
       if(arc < resize_border) {
@@ -318,7 +314,7 @@ namespace hamt {
         place = new_root_entries[arc];
       }
 
-      while(!(place.is_null() || place.is_entry())) {
+      while(!(place.is_null() || place.is_leaf())) {
         arc = in.read();
         place = place.to_node()->get_entry(arc);
       }  
@@ -327,21 +323,16 @@ namespace hamt {
     }
 
   private:
-    amt_val_t* root_entries;
-    amt_val_t* new_root_entries;
-    unsigned e_size;
+    amt_entry_t* root_entries;
+    amt_entry_t* new_root_entries;
     unsigned root_bitlen;
+    unsigned entries_size;
     unsigned resize_border;
     unsigned entry_count;
 
-    static const Hash hash;
+    fixed_size_allocator<sizeof(amt_leaf_t)> alloca;
     static const Eql eql;
-
-    fixed_size_allocator<sizeof(entry_t)> alloca;
   };
-
-  template<class Key, class Value, class Hash, class Eql>
-  const Hash map<Key,Value,Hash,Eql>::hash;
 
   template<class Key, class Value, class Hash, class Eql>
   const Eql map<Key,Value,Hash,Eql>::eql;

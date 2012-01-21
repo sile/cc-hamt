@@ -1,0 +1,8 @@
+[概要]
+- HAMT(Hash Array Mapped Trie)実装
+　-- HAMT:
+　　--- Bagwell, P. (2001) Ideal Hash Trees. Technical Report, 2001
+　　--- http://lampwww.epfl.ch/papers/idealhashtrees.pdf
+- ハッシュマップの一種
+
+=> 単純なハッシュテーブル(ex: https://github.com/sile/cc-dict)に対して性能的な優位性が見られなかったの、ある程度(性能評価が可能なレベル)動くところまでしか作っていない
