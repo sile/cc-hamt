@@ -1,9 +1,3 @@
-/**
- * @license cc-dict 0.0.7
- * Copyright (c) 2011, Takeru Ohta, phjgt308@gmail.com
- * MIT license
- * https://github.com/sile/cc-hamt/blob/master/COPYING
- */
 #ifndef HAMT_ALLOCATOR_HH
 #define HAMT_ALLOCATOR_HH
 

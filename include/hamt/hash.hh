@@ -1,10 +1,3 @@
-/**
- * @license cc-hamt 0.0.1
- * Copyright (c) 2012, Takeru Ohta, phjgt308@gmail.com
- * MIT license
- * https://github.com/sile/cc-dict/blob/master/COPYING
- */
-
 #ifndef HAMT_HASH_HH
 #define HAMT_HASH_HH
 
@@ -23,7 +16,7 @@ namespace hamt {
     }
 
     unsigned operator()(const Key& key, unsigned n) const {
-      return hash(key * n); // XXX:
+      return hash(key, n); 
     }
   };
 
@@ -50,9 +43,29 @@ namespace hamt {
       h = (h*33) + *c;
     return h;
   }
-  
-  unsigned double_hash(unsigned hashcode1, unsigned hashcode2, unsigned nth) {
-    return hashcode1 + hashcode2 * nth;
+
+  unsigned hash(int key, unsigned n) {
+    return key * GOLDEN_RATIO_PRIME * n;
+  }
+
+  unsigned hash(unsigned key, unsigned n) {
+    return key * GOLDEN_RATIO_PRIME * n;
+  }
+
+  unsigned hash(long key, unsigned n) { 
+    // XXX: if sizeof(long) > sizeof(unsigned), the calculation will lose high bits information of key.
+    return key * GOLDEN_RATIO_PRIME * n;
+  }
+
+  unsigned hash(const char* key, unsigned n) {
+    return hash(reinterpret_cast<long>(key));
+  }
+
+  unsigned hash(const std::string& key, unsigned n) {
+    unsigned h = GOLDEN_RATIO_PRIME * 33 + n;
+    for(const char* c=key.c_str(); *c != 0; c++)
+      h = (h*33) + *c;
+    return h;
   }
 }
 
